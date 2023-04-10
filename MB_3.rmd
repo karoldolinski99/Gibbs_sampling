@@ -1,0 +1,198 @@
+---
+title: "<center>Metody Bayesowskie - projekt III</center>"
+output: 
+    html_document:
+          toc: true
+          toc_float: true
+          number_sections: true
+          css: style.css
+---
+
+<center>
+Karol Doliński, Magdalena Smalarz, Małgorzata Warczyńska
+
+Informatyka i Ekonometria
+</center>
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+ fig.width = 6,
+ fig.asp = 0.9,
+ out.width = "100%"
+)
+```
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+library(lmtest)
+library(invgamma)
+library(MCMCpack)
+library(metRology)
+library(bayestestR)
+library(fCopulae)
+library(car)
+library(dplyr)
+library(kableExtra)
+library(ggplot2)
+library(plyr)
+library(bayestestR)
+library(Metrics)
+library(MASS)
+library(mvtnorm)
+set.seed(7)
+
+```
+
+-----
+
+# Wprowadzenie
+
+Próbkowanie Gibbsa to algorytm Monte Carlo z łańcuchem Markowa (MCMC) do uzyskania sekwencji obserwacji, które są aproksymowane z określonego wielowymiarowego rozkładu prawdopodobieństwa, gdy próbkowanie bezpośrednie jest trudne. Algorytm Gibbsa wykorzystuje liczby losowe i jest powszechnie używane jako środek wnioskowania statystycznego. Może być wykorzystany do estymacji parametrów modelu regresji wielorakiej. Celem projektu jest przedstawienie kroków działania algorytmu Gibbsa i porównanie uzyskanych wyników. 
+
+# Zbiór danych
+
+Dane wykorzystane w badaniu zawierają 75 obserwacji, z których każda jest opisana za pomocą 4 zmiennych:
+
+* _cena_ – cena danego telefonu (w PLN);
+* _pamiec_ – ilość pamięci w danym telefonie (w GB);
+* _PPI_ – liczba pikseli przypadająca na cal długości, określa rozdzielczość;
+* _lcd_ – zmienna binarna, przyjmuje wartość 1 jeśli ekran jest ekranem typu LCD, 0 – jeśli inny.
+
+Dane zostały zostały zebrane w dniu 24 maja 2022 roku z dwóch stron internetowych:
+
+* https://www.x-kom.pl/
+zmienne: cena, pamiec;
+* https://phonesdata.com/pl/
+zmienne: PPI, lcd
+
+Przy gromadzeniu danych odnośnie ceny smartfonów nie uwzględniono akcji promocyjnych sklepu dotyczących niektórych z badanych urządzeń.
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+#Wgranie danych
+wynikiGibbs2 <- read.csv('Gibbs_beta_results.csv', row.names = 1) # ze spalonymi
+
+# model z poprzednich badań
+dane0 <- read.csv('MB_3_dane0.csv', sep = ';')
+dane0[,1:3] <- log(dane0[,1:3])
+model_mnk0 <- lm(cena ~ ., data = dane0)
+#summary(model_mnk0)
+
+# model bieżący - KMNK
+dane <- read.csv('MB_3_dane.csv', sep = ';')
+dane[,1:3] <- log(dane[,1:3])
+index = sort(sample(nrow(dane), 5))
+dane_testowe <- dane[index,]
+dane <- dane[-index,]
+model_mnk <- lm(cena ~ ., data = dane)
+#summary(model_mnk)
+```
+
+# Rozkłady brzegowe
+Próbkowanie algorytmem Gibbsa wykorzystano do wyznaczenia brzegowych rozkładów _a posteriori_. Algorytm próbkowania Gibbsa generuje instancję z rozkładu każdej zmiennej po kolei, w zależności od bieżących wartości pozostałych zmiennych. W badaniu przyjęto niezależność rozkładów warunkowych $\beta$ i $\sigma^2$. 
+
+Algorytm Gibbsa zawiera się w trzech krokach:
+
+1. Wybierz wartość startową $\sigma^{2(0)}$. 
+2. W $i$-tej iteracji wylosuj:  
++ $\beta^{(i)}$ z $k$-wymiarowego rozkładu normalnego $N_k(\beta_1^{(i)}, \Sigma_1^{(i)})$,
++ $\sigma^{2(i)}$ z rozkładu odwrotnego gamma z parametrami $IG(\frac{\alpha_1}{2},\frac{\delta_{1}^{i}}{2})$,
+
+gdzie:  
+
++ $\Sigma_1^{(i)}=(\sigma^{-2(i-1)}X^TX+\Sigma_0^{-1})^{-1}$,
++ $\beta_1^{(i)}=\Sigma_1^{(i)}(\sigma^{-2(i-1)}X^TY+\Sigma_0^{-1}\beta_0)$,
++ $\delta_1^{(i)}=\delta_0+(Y-X\beta^{(i)})^T(Y-X\beta^{(i)})$.
+
+3. Powtarzaj krok 2.
+
+
+Za wartość startową $\sigma^{2(0)}$ przyjęto liczbę 1, a pętlę z algorytmem powtórzono 150 000 razy. Sam algorytm opiera się na wyznaczaniu w każdej iteracji parametrów $\Sigma_1^{(i)}$, $\beta_1^{(i)}$ i $\delta_1^{(i)}$, których wzory zostały przedstawione powyżej. Szukane miary bazują na wartościach _a priori_, czyli parametrach wyestymowanych w modelu MNK sprzed 2 lat, gdzie:
+
++ $\beta_0$ - wektor oszacowany MNK we wcześniejszym badaniu,
++ $\Sigma_0$ - macierz $(X^{T}X)^{-1}$ uzyskanej z wcześniejszych badań,
++ $\alpha_0$ - liczba stopni swobody $(n-k)$ wcześniejszych badań,
++ $\delta_0$ - suma kwadratów reszt z wcześniejszego badania.
+
+Warto zaznaczyć, że możliwość uzyskania pożądanych parametrów jest osiągana dopiero po $n$ iteracjach. W celu wyelimonowania cykli spalonych odrzucono pierwsze $n$ wylosowanych danych. Opierając się zatem na metodyce działania algorytmu symulowanego wyżarzania jako $n$ przyjęto 100 000. Algorytm ten bowiem z każdą następną iteracją zbliża się do optymalnego rozwiązania. Oznacza to, że w kolejnych krokach szansa przejścia do nowego, gorszego położenia maleje, aż w końcu stabilizuje się.
+
+# Estymatory parametrów
+Następnie wyznaczono wartości oczekiwane parametrów modelu regresji wielorakiej, jak również 95% przedziały ufności parametrów (odpowiednie kwantyle z rozkładów brzegowych parametrów).
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+opt_gibbs <- as.data.frame(round(apply(wynikiGibbs2, 2, mean), 4))
+opt_gibbs_sd <- as.data.frame(round(apply(wynikiGibbs2, 2, sd), 4))
+
+all_gibbs <- cbind(opt_gibbs, opt_gibbs_sd)
+colnames(all_gibbs) <- c("Estymator paramteru", "Błąd standardowy")
+
+#Kwantyle
+przedzialy_gibbbs <- quantile(wynikiGibbs2$X1, probs = c(0.025, 0.975))
+przedzialy_gibbbs <- rbind(przedzialy_gibbbs, quantile(wynikiGibbs2$X2, probs = c(0.025, 0.975)))
+przedzialy_gibbbs <- rbind(przedzialy_gibbbs, quantile(wynikiGibbs2$X3, probs = c(0.025, 0.975)))
+przedzialy_gibbbs <- rbind(przedzialy_gibbbs, quantile(wynikiGibbs2$X4, probs = c(0.025, 0.975)))
+colnames(przedzialy_gibbbs) <- c('Dolna granica przedziału ufności', 'Górna granica przedziału ufności')
+rownames(przedzialy_gibbbs) <- c("$stała$", "$pamięć$", '$PPI$', '$lcd$')
+
+all_gibbs <- cbind(all_gibbs, przedzialy_gibbbs)
+rownames(all_gibbs) <- c("$stała$", "$pamięć$", '$PPI$', '$lcd$')
+
+all_gibbs %>% kbl() %>% kable_styling() %>%
+  footnote(general = "Tab. 1.: Estymatory, błędy standardowe i przedziały ufności parametrów modelu otrzymane algorytmem Gibbsa",
+           general_title = "",
+           footnote_as_chunk = T, title_format = c("italic"))
+```
+
+
+Wyestymowane parametry za pomocą próbkowania Gibbsa porównano z estymatorami bayesowskimi otrzymanymi w projekcie nr 2 oraz z parametrami wcześniejszego badania sprzed 2 lat.
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+#estymatory z drugiego projektu
+opt_drugi <- c(-2.3450, 0.5159, 1.2981, -0.2971)
+opt_drugi_sd <- c(1.7064, 0.0035, 0.0548, 0.0061)
+
+#przedziały ufności hpdi z drugiego projektu
+przedzialy_drugi_dolne <- c(-5.6730788, 0.5089872, 1.1902459, -0.3092944)
+przedzialy_drugi_gorne <- c(1.0185013, 0.5228284, 1.4055609, -0.2849686)
+
+all_drugi <- cbind(opt_drugi, opt_drugi_sd, przedzialy_drugi_dolne, przedzialy_drugi_gorne)
+rownames(all_drugi) <- c("$stała$", "$pamięć$", '$PPI$', '$lcd$')
+colnames(all_drugi) <- c("Estymator paramteru", "Błąd standardowy", "Dolna granica przedziału ufności", "Górna granica przedziału ufności")
+
+all_drugi %>% kbl() %>% kable_styling() %>%
+  footnote(general = "Tab. 2.: Estymatory bayesowskie, błędy standardowe i przedziały ufności parametrów modelu otrzymane w projekcie nr 2",
+           general_title = "",
+           footnote_as_chunk = T, title_format = c("italic"))
+```
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+#MNK 
+coef0 <- round(coeftest(model_mnk), 4)
+coef0 <- coef0[1:4,1:4]
+coef0 <- coef0[,-3]
+coef0 <- coef0[,-3]
+colnames(coef0) <- c('Estymator paramteru', 'Błąd standardowy')
+
+#Prziedziały ufności dla MNK 
+przedzialy_mnk0 <- as.data.frame(confint(model_mnk, level = 0.95))
+colnames(przedzialy_mnk0) <- c("Dolna granica przedziału ufności", "Górna granica przedziału ufności")
+
+all_mnk0 <- cbind(coef0, przedzialy_mnk0)
+rownames(all_mnk0) <- c("$stała$", "$pamięć$", '$PPI$', '$lcd$')
+
+all_mnk0 %>% kbl() %>% kable_styling() %>%
+  footnote(general = "Tab. 3.: Estymatory, błędy standardowe i przedziały ufności parametrów modelu otrzymane w badaniu za pomocą KMNK",
+           general_title = "",
+           footnote_as_chunk = T, title_format = c("italic"))
+```
+
+Analizując umieszczone tabele można zauważyć duże podobieństwo uzyskanych estymatorów parametrów w każdej z wykorzystanych metod. Wartość parametru zmiennej _pamięć_ przyjmuje wartości bliskie 0,5, _PPI_ – około 1,3, a dla _lcd_ - waha się w zakresie od -0,30 do -0,24. Błędy standardowe poszczególnych parametrów również przyjmują zbliżone do siebie wartości. Odchylenia standardowe uzyskane algorytmem Gibbsa są najwyższe w porównaniu do dwóch pozostałych metod. Najniższe wartości przyjmują z kolei błędy dla estymatorów bayesowskich z projektu nr 2. Najszersze przedziały ufności zwróciło próbkowanie Gibbsa.
+
+# Podsumowanie
+W projekcie wykorzystano próbkowanie Gibbsa do estymacji parametrów modelu regresji wielorakiej. Wartości uzyskane w ten sposób były zbliżone do tych, które otrzymano po zastosowaniu Klasycznej Metody Najmniejszych Kwadratów oraz wnioskowania bayesowskiego. Należy zauważyć, iż wykorzystany zbiór był stosunkowo niewielki, dlatego ciekawym rozszerzeniem badania mogłoby być porównanie wartości wyestymowanych parametrów za pomocą wyżej wymienionych metod dla badania przeprowadzonego w oparciu o znacznie większy zbiór danych. Być może wyestymowane parametry byłyby bardziej skupione wokół jednej wartości. Niemniej badanie pokazuje, iż oszacowania poszczególnych parametrów są podobne, większa różnica występuje przy porównaniu przedziałów ufności. 
+
+# Bibliografia
+<ul>
+<li>Jacek Osiewalski, Jerzy Marzec,<i>"Nowoczesne metody Monte Carlo w bayesowskiej analizie
+efektywności kosztowej banków"</i>, Katedra Ekonometrii Akademii Ekonomicznej w Krakowie</li>
+<li>Tomasz Wójtowicz, wykłady z przedmiotu _Metody Bayesowskie_</li>
+<li>https://wikipredia.net/pl/Gibbs_sampling [dostęp: 20.06.2022]</li>
+</ul>
